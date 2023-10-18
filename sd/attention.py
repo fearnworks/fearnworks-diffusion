@@ -59,4 +59,65 @@ class SelfAttention(nn.Module):
         output = self.out_project(output)
         return output
         
+class CrossAttention(nn.Module):
+    """
+    A cross-attention layer for the U-Net model.
+
+    This layer computes the cross-attention between two input tensors, `x` and `y`. 
+    It first projects `x` and `y` into a shared embedding space using linear layers, 
+    and then computes the attention weights between the projected `x` and `y` tensors. 
+    The attention weights are used to compute a weighted sum of the projected `y` tensor,
+    which is then projected back into the original embedding space using another linear layer.
+
+    Args:
+        num_heads (int): The number of attention heads to use.
+        dim_embed (int): The dimension of the embedding space.
+        dim_cross (int): The dimension of the cross tensor.
+        in_proj_bias (bool): Whether to include bias terms in the input projection layers. Default is True.
+        out_proj_bias (bool): Whether to include bias terms in the output projection layer. Default is True.
+    """
+    def __init__(self, num_heads, dim_embed: int, dim_cross: int, in_proj_bias=True, out_proj_bias=True):
+        super().__init__()
+        self.q_project = nn.Linear(dim_embed, dim_embed, bias=in_proj_bias)
+        self.k_project = nn.Linear(dim_cross, dim_embed, bias=in_proj_bias)
+        self.v_project = nn.Linear(dim_cross, dim_embed, bias=in_proj_bias)
+        self.out_project = nn.Linear(dim_embed, dim_embed, bias=out_proj_bias)
+        self.num_heads = num_heads
+        self.dim_head = dim_embed // num_heads
+        
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        Apply the cross-attention layer to the input tensors.
+
+        Args:
+            x (torch.Tensor): The query tensor of shape (batch_size, seq_len_q, dim_q).
+            y (torch.Tensor): The key-value tensor of shape (batch_size, seq_len_kv, dim_kv).
+
+        Returns:
+            output (torch.Tensor): The output tensor of shape (batch_size, seq_len_q, dim_q).
+        """
+        input_shape = x.shape
+        batch_size, sequence_length, dim_embed = input_shape
+        intermediate_shape = (batch_size, -1, self.num_heads, self.dim_head)
+        
+        q = self.q_proj(x)
+        k = self.k_project(y)
+        v = self.v_project(y)
+        
+        q = q.view(intermediate_shape).transpose(1,2)
+        k = k.view(intermediate_shape).transpose(1,2)
+        v = v.view(intermediate_shape).transpose(1,2)
+        
+        weight = q @ k.transpose(-1,-2)
+        weight /= math.sqrt(self.dim_head)
+        weight = F.softmax(weight, dim=-1)
+        
+        output = weight @ v
+        output = output.transpose(1,2).contiguous()
+        
+        output = output.view(input_shape)
+        
+        output = self.out_project(output)
+        
+        return output
         
