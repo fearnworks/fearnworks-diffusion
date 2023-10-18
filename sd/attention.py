@@ -16,7 +16,7 @@ class SelfAttention(nn.Module):
     def __init__(self, num_heads: int, dim_embed: int, in_proj_bias=True, out_proj_bias=True):
         super().__init__()
         self.in_proj = nn.Linear(dim_embed, 3 * dim_embed, bias=in_proj_bias)
-        self.out_project = nn.Linear(dim_embed, dim_embed, bias=out_proj_bias)
+        self.out_proj = nn.Linear(dim_embed, dim_embed, bias=out_proj_bias)
         self.num_heads = num_heads
         self.dim_head = dim_embed // num_heads
         
@@ -56,7 +56,7 @@ class SelfAttention(nn.Module):
         # (Batch_size, H, Seq_len, Dim / H ) -> (Batch_Size, Seq_Len, H, Dim/H)
         output = output.transpose(1,2)
         output = output.reshape(input_shape)
-        output = self.out_project(output)
+        output = self.out_proj(output)
         return output
         
 class CrossAttention(nn.Module):
@@ -78,10 +78,10 @@ class CrossAttention(nn.Module):
     """
     def __init__(self, num_heads, dim_embed: int, dim_cross: int, in_proj_bias=True, out_proj_bias=True):
         super().__init__()
-        self.q_project = nn.Linear(dim_embed, dim_embed, bias=in_proj_bias)
-        self.k_project = nn.Linear(dim_cross, dim_embed, bias=in_proj_bias)
-        self.v_project = nn.Linear(dim_cross, dim_embed, bias=in_proj_bias)
-        self.out_project = nn.Linear(dim_embed, dim_embed, bias=out_proj_bias)
+        self.q_proj = nn.Linear(dim_embed, dim_embed, bias=in_proj_bias)
+        self.k_proj = nn.Linear(dim_cross, dim_embed, bias=in_proj_bias)
+        self.v_proj = nn.Linear(dim_cross, dim_embed, bias=in_proj_bias)
+        self.out_proj = nn.Linear(dim_embed, dim_embed, bias=out_proj_bias)
         self.num_heads = num_heads
         self.dim_head = dim_embed // num_heads
         
@@ -101,8 +101,8 @@ class CrossAttention(nn.Module):
         intermediate_shape = (batch_size, -1, self.num_heads, self.dim_head)
         
         q = self.q_proj(x)
-        k = self.k_project(y)
-        v = self.v_project(y)
+        k = self.k_proj(y)
+        v = self.v_proj(y)
         
         q = q.view(intermediate_shape).transpose(1,2)
         k = k.view(intermediate_shape).transpose(1,2)
@@ -117,7 +117,7 @@ class CrossAttention(nn.Module):
         
         output = output.view(input_shape)
         
-        output = self.out_project(output)
+        output = self.out_proj(output)
         
         return output
         

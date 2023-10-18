@@ -14,23 +14,19 @@ class CLIPEmbedding(nn.Module):
     """
     def __init__(self, num_vocab: int, dim_embed: int, num_tokens: int):
         super().__init__()
+        
         self.token_embedding = nn.Embedding(num_vocab, dim_embed)
-        self.position_embedding = nn.Parameter(torch.zeros(num_tokens, dim_embed))
-
-    def forward(self, tokens: torch.LongTensor) -> torch.FloatTensor:  
-        """
-        Apply the CLIPEmbedding layer to the input tensor.
-
-        Args:
-            tokens (torch.LongTensor): The input tensor of shape (batch_size, seq_len).
-
-        Returns:
-            output (torch.FloatTensor): The output tensor of shape (batch_size, seq_len, dim_embed).
-        """
-        x = self.token_embedding(tokens)
-        x += self.position_embedding 
-        return x 
+        # A learnable weight matrix encodes the position information for each token
+        self.position_embedding = nn.Parameter(torch.zeros((num_tokens, dim_embed)))
     
+    def forward(self, tokens):
+        # (Batch_Size, Seq_Len) -> (Batch_Size, Seq_Len, Dim) 
+        x = self.token_embedding(tokens)
+        # (Batch_Size, Seq_Len) -> (Batch_Size, Seq_Len, Dim)
+        x += self.position_embedding
+        
+        return x
+
 class CLIPLayer(nn.Module):
     """
     A layer in the Contrastive Language-Image Pre-Training (CLIP) model that applies self-attention and feed-forward layers to an input tensor.
@@ -41,11 +37,16 @@ class CLIPLayer(nn.Module):
     """
     def __init__(self, num_heads: int, dim_embed: int):
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim_embed)
+        
+        # Pre-attention norm
+        self.layernorm_1 = nn.LayerNorm(dim_embed)
+        # Self attention
         self.attention = SelfAttention(num_heads, dim_embed)
-        self.norm2 = nn.LayerNorm(dim_embed)
-        self.linear1 = nn.Linear(dim_embed, dim_embed * 4)
-        self.linear2 = nn.Linear(dim_embed * 4, dim_embed)
+        # Pre-FNN norm
+        self.layernorm_2 = nn.LayerNorm(dim_embed)
+        # Feedforward layer
+        self.linear_1 = nn.Linear(dim_embed, 4 * dim_embed)
+        self.linear_2 = nn.Linear(4 * dim_embed, dim_embed)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -57,19 +58,39 @@ class CLIPLayer(nn.Module):
         Returns:
             output (torch.Tensor): The output tensor of shape (batch_size, seq_len, dim_embed).
         """
-        # (Batch_size, Seq_Len, Dim)
-        residue = x 
-        x = self.norm1(x)
-        x = self.attention(x, causal_mask=True)
-        x += x
-        
-        # Feed Forward
+        # (Batch_Size, Seq_Len, Dim)
         residue = x
-        x = self.norm2(x)
-        x = self.linear1(x)
-        x = x * torch.signmoid(1.702 * x) # Quick approximation of GELU
-        x = self.linear2(x)
+        
+        ### SELF ATTENTION ###
+
+        # (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, Dim)
+        x = self.layernorm_1(x)
+        
+        # (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, Dim)
+        x = self.attention(x, causal_mask=True)
+        
+        # (Batch_Size, Seq_Len, Dim) + (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, Dim)
         x += residue
+
+        ### FEEDFORWARD LAYER ###
+        # Apply a feedforward layer where the hidden dimension is 4 times the embedding dimension. 
+
+        residue = x
+        # (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, Dim)
+        x = self.layernorm_2(x)
+        
+        # (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, 4 * Dim)
+        x = self.linear_1(x)
+        
+        # (Batch_Size, Seq_Len, 4 * Dim) -> (Batch_Size, Seq_Len, 4 * Dim)
+        x = x * torch.sigmoid(1.702 * x)   # QuickGELU activation function
+        
+        # (Batch_Size, Seq_Len, 4 * Dim) -> (Batch_Size, Seq_Len, Dim)
+        x = self.linear_2(x)
+        
+        # (Batch_Size, Seq_Len, Dim) + (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, Dim)
+        x += residue
+
         return x
 
 class CLIP(nn.Module):
@@ -77,28 +98,26 @@ class CLIP(nn.Module):
     A Contrastive Language-Image Pre-Training (CLIP) model that maps text and images to a joint embedding space.
     """
     def __init__(self):
-        self.embedding = CLIPEmbedding(49408, 768. 77)
-        self.layers = nn.Module([
-            CLIPLayer(12,768) for i in range(12),
+        super().__init__()
+        self.embedding = CLIPEmbedding(49408, 768, 77)
+
+        self.layers = nn.ModuleList([
+            CLIPLayer(12, 768) for i in range(12)
         ])
+
         self.layernorm = nn.LayerNorm(768)
-
+    
     def forward(self, tokens: torch.LongTensor) -> torch.FloatTensor:
-        """
-        Apply the CLIP model to the input tensor.
-
-        Args:
-            tokens (torch.LongTensor): The input tensor of shape (batch_size, seq_len).
-
-        Returns:
-            output (torch.FloatTensor): The output tensor of shape (batch_size, 768).
-        """
         tokens = tokens.type(torch.long)
-        # (Batch_size, Seq_Len) -> (Batch_size, Seq_Len, Dim)
-        state = self.embedding(tokens)
-        for layer in self.layers:
-            state = layer(state)
-            
-        output = self.layernorm(state)
-        return output
         
+        # (Batch_Size, Seq_Len) -> (Batch_Size, Seq_Len, Dim)
+        state = self.embedding(tokens)
+
+        # Apply encoder layers similar to the Transformer's encoder.
+        for layer in self.layers: 
+            # (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, Dim)
+            state = layer(state)
+        # (Batch_Size, Seq_Len, Dim) -> (Batch_Size, Seq_Len, Dim)
+        output = self.layernorm(state)
+        
+        return output
